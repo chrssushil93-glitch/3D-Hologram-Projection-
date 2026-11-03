@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LumaGrid AIR Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307090f'/%3E%3Cpath d='M16 5l9 11-9 11-9-11z' fill='none' stroke='%2335d0ff' stroke-width='2.5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/build/three.module.js",
+    "three/addons/": "./vendor/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="mark">◈</span> LUMAGRID <b>AIR</b> <span class="sub">Studio v0.1 · simulator-led MVP</span></div>
+  <div class="topnote">Simulation only. Nothing here produces light in air; a validated optical engine is a separate research milestone.</div>
+</header>
+
+<main class="layout">
+  <!-- LEFT: authoring -->
+  <aside class="panel left" aria-label="Studio controls">
+    <section>
+      <h2>1 · Model</h2>
+      <div class="row">
+        <label class="btn" for="file">Import GLB / glTF</label>
+        <input id="file" type="file" accept=".glb,.gltf,model/gltf-binary" hidden>
+        <select id="sample" aria-label="Sample model">
+          <option value="knot">Sample: torus knot</option>
+          <option value="orb">Sample: ring &amp; orb (2 colours)</option>
+          <option value="vase">Sample: vase</option>
+          <option value="cube">Sample: cube</option>
+        </select>
+      </div>
+      <p class="hint" id="modelInfo">—</p>
+    </section>
+
+    <section>
+      <h2>2 · Display volume <small>metres</small></h2>
+      <div class="grid3">
+        <label>Width X<input id="volX" type="number" min="0.1" max="50" step="0.1" value="2"></label>
+        <label>Depth Y<input id="volY" type="number" min="0.1" max="50" step="0.1" value="1"></label>
+        <label>Height Z<input id="volZ" type="number" min="0.1" max="50" step="0.1" value="2"></label>
+      </div>
+      <p class="hint">Default 2 × 1 × 2 m. X = width, Y = depth, Z = height.</p>
+    </section>
+
+    <section>
+      <h2>3 · Placement <small>XYZ</small></h2>
+      <label class="slider">Object size <output id="o_size"></output>
+        <input id="size" type="range" min="0.05" max="3" step="0.01" value="0.6"></label>
+      <label class="slider">Position X <output id="o_px"></output>
+        <input id="px" type="range" min="-2" max="2" step="0.01" value="0"></label>
+      <label class="slider">Position Y (depth) <output id="o_py"></output>
+        <input id="py" type="range" min="-1" max="1" step="0.01" value="0"></label>
+      <label class="slider">Position Z (height) <output id="o_pz"></output>
+        <input id="pz" type="range" min="0" max="3" step="0.01" value="1"></label>
+      <label class="slider">Rotation (yaw) <output id="o_yaw"></output>
+        <input id="yaw" type="range" min="-180" max="180" step="1" value="0"></label>
+    </section>
+
+    <section>
+      <h2>4 · Animation</h2>
+      <label class="slider">Spin about the volume axis <output id="o_spin"></output>
+        <input id="spin" type="range" min="-180" max="180" step="1" value="36"></label>
+      <div class="grid2">
+        <label>Duration (s)<input id="dur" type="number" min="1" max="120" step="1" value="10"></label>
+        <label>Frame rate<select id="fps"><option>24</option><option selected>30</option><option>60</option></select></label>
+      </div>
+    </section>
+
+    <section>
+      <h2>5 · Voxel density</h2>
+      <label class="slider">Voxel size <output id="o_vox"></output>
+        <input id="vox" type="range" min="5" max="100" step="1" value="20"></label>
+      <label class="slider">Surface samples <output id="o_samples"></output>
+        <input id="samples" type="range" min="2000" max="80000" step="1000" value="30000"></label>
+      <p id="stats" class="stats">—</p>
+    </section>
+  </aside>
+
+  <!-- CENTRE: viewport -->
+  <section class="stage-wrap">
+    <div class="toolbar">
+      <div class="seg" role="group" aria-label="Preview mode">
+        <button id="modeVisual" type="button">Visual preview</button>
+        <button id="modeOptical" type="button" class="on">Optical simulation</button>
+      </div>
+      <div class="seg" role="group" aria-label="Viewing position">
+        <button id="viewOrbit" type="button" class="on">Orbit</button>
+        <button id="viewL" type="button">−90°</button>
+        <button id="viewC" type="button">0°</button>
+        <button id="viewR" type="button">+90°</button>
+        <button id="viewTri" type="button">Tri-view</button>
+      </div>
+    </div>
+    <div id="stage">
+      <canvas id="gl"></canvas>
+      <div id="banner" class="banner">Editor preview</div>
+      <div id="legend" class="legend">X width → · Y depth (away from viewers) · Z height ↑</div>
+      <div id="trilabels" class="trilabels" hidden><span>Left −90°</span><span>Centre 0°</span><span>Right +90°</span></div>
+    </div>
+    <p id="modeNote" class="modenote"></p>
+    <div class="timeline">
+      <label class="chk"><input id="play" type="checkbox" checked> Play</label>
+      <input id="scrub" type="range" min="0" max="10" step="0.01" value="0" aria-label="Animation timeline">
+      <span id="tlabel">0.00 s</span>
+    </div>
+  </section>
+
+  <!-- RIGHT: compiler + machine -->
+  <aside class="panel right" aria-label="Compiler and machine">
+    <section>
+      <h2>6 · Spatial compiler</h2>
+      <div class="row">
+        <button id="compile" class="primary" type="button">Compile job</button>
+        <button id="download" type="button" disabled>Download job.json</button>
+      </div>
+      <p id="jobStatus" class="hint">No job compiled yet.</p>
+      <ul id="report" class="report"></ul>
+    </section>
+
+    <section>
+      <h2>7 · Machine <small>virtual</small></h2>
+      <div class="statusline"><span id="stateBadge" class="badge s-disconnected">Disconnected</span><span id="stateInfo" class="hint"></span></div>
+      <div class="grid2 btns">
+        <button id="mConnect" type="button">Connect</button>
+        <button id="mLoad" type="button">Send job</button>
+        <button id="mPrepare" type="button">Self-check</button>
+        <button id="mDisarm" type="button">Disarm</button>
+      </div>
+      <label class="op">Operator<input id="operator" type="text" placeholder="Name of authorising operator" autocomplete="off"></label>
+      <div class="grid2 btns">
+        <button id="mArm" type="button">Arm</button>
+        <button id="mStart" type="button" class="primary">Start</button>
+        <button id="mStop" type="button">Stop</button>
+        <button id="mReset" type="button">Reset fault</button>
+      </div>
+      <button id="mEstop" class="estop" type="button">EMERGENCY STOP</button>
+      <label class="chk"><input id="interlock" type="checkbox" checked> Safety interlock closed</label>
+      <p class="hint">The machine's own safety layer decides. Software can request; it cannot force emission.</p>
+      <h3>Machine log</h3>
+      <ol id="log" class="log"></ol>
+    </section>
+  </aside>
+</main>
+
+<script type="module" src="studio.js"></script>
+</body>
+</html>

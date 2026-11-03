@@ -1,0 +1,12 @@
+{
+  "name": "lumagrid-air-studio",
+  "version": "0.1.0",
+  "description": "LumaGrid AIR Studio - simulator-led MVP: 3D import, XYZ volume editor, voxel preview with 180 degree viewing, hardware-neutral job compiler and device simulator.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "license": "UNLICENSED"
+}
