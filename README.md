@@ -10,7 +10,7 @@ Requires Node 18+. No install step (Three.js is vendored in `vendor/`).
 
 ```
 npm start          # http://localhost:5173
-npm test           # 22 unit tests for the core logic
+npm test           # 33 unit tests (core logic + CGH simulation)
 ```
 
 ## What is in v0.1
@@ -25,8 +25,22 @@ npm test           # 22 unit tests for the core logic
 | Two separate preview modes: Visual preview and Optical simulation, with a standing caveat that neither predicts real hardware | `studio.js` |
 | Spatial compiler → hardware-neutral job package (`lumagrid.air.job/0.1`, SHA-256 checked) | `src/job.js` |
 | Compile checks: geometry inside volume (including the full spin sweep), voxel budget, backend availability, colour channels | `src/job.js` |
+| CGH bench: phase hologram for an ideal SLM, numerical reconstruction per depth plane, formed-point metrics, aliasing check | `src/cgh.js`, `src/fft.js`, Studio section 8 |
 | Device simulator with the LumaGrid Device Protocol states: Disconnected, Safe, Ready, Armed, Running, Fault | `src/device.js` |
 | Machine panel: connect, send job, self-check, arm (operator name required), start/stop, E-STOP, interlock, fault reset, audit log | `studio.js`, `src/device.js` |
+
+## CGH bench (what it does and does not tell you)
+
+Studio section 8 takes the compiled job's voxels and runs them through a simulated holographic display:
+
+1. Up to N voxels (default 250) are mapped onto a **millimetre-scale bench volume**: lateral extent ±0.8 mm, depth 190–210 mm in front of a 256 × 256 px SLM (12.5 µm pitch, 532 nm). The job's metre-scale volume is scaled onto this; it is not a claim that a 2 × 1 × 2 m image is possible.
+2. A phase-only hologram is built by summing converging waves from every point (point-source method), then quantised to the chosen number of phase levels.
+3. The light is propagated numerically (angular spectrum) to nine depth planes and each point is scored: its brightest pixel against the plane average. A point counts as formed at 5× or more.
+4. Points whose fringes are finer than the SLM pixel pitch can show are counted as aliased.
+
+Example from the default torus knot (250 points, 256 phase levels): all points formed, mean peak 173× the plane average, 42% of each plane's light on target pixels. With 2 phase levels the mean peak drops to 70×.
+
+Assumptions that make this an **upper bound, not a prediction**: perfect phase response, perfect plane-wave illumination, no zero-order or stray light, no pixel crosstalk, no speckle from real optics. Nothing here measures brightness, safety or visibility, and the compute times (about 1 s in a browser) belong to the simulation only. A single SLM's pixel count limits the size and depth of volume it can address, so a metre-scale volume is far beyond this bench; closing that gap is what a real optical-engine study would have to do.
 
 ## Safety model (mirrors what a real adapter must keep)
 
@@ -49,9 +63,10 @@ index.html, styles.css, studio.js   Studio UI (Three.js)
 src/spatial.js                      sampling, voxelising, placement, volume checks, viewer arc
 src/job.js                          compiler, job schema, backend registry
 src/device.js                       virtual machine and protocol states
+src/cgh.js, src/fft.js              CGH bench simulation (point-source hologram, angular-spectrum propagation)
 src/sha256.js                       checksum shared by browser and Node
 server.js                           tiny static server
-test/core.test.js                   unit tests
+test/core.test.js, cgh.test.js     unit tests
 vendor/three/                       Three.js r170 (MIT, see LICENSE)
 ```
 
@@ -62,11 +77,13 @@ vendor/three/                       Three.js r170 (MIT, see LICENSE)
 - Spin is the only animation type in the job format so far. Skeletal and keyframe animation are not compiled.
 - The job stores base voxels plus an animation spec rather than baked frames.
 - Optical-simulation mode shows voxels, not a physical model: no brightness, colour accuracy, plasma lifetime or ambient-light effects.
-- Not built yet: cloud API, accounts, MQTT edge runtime, the CGH / `slmsuite` backend, hardware adapters. The device protocol and job schema are the seams where those plug in.
+- The CGH bench is analysis only: the device simulator still plays the plain voxel job, and `slm-cgh` / `plasma-cgh` remain unavailable backends. Only the bench-scale point-source method is implemented (no iterative Gerchberg-Saxton, no zero-order handling).
+- Not built yet: cloud API, accounts, MQTT edge runtime, hardware adapters. The device protocol and job schema are the seams where those plug in.
 
 ## Suggested next steps
 
-1. Run the CGH backend in simulation: voxel positions → SLM phase pattern (`slmsuite`), still no hardware.
-2. Add keyframe animation to the job format.
-3. Wrap the device simulator in an MQTT edge runtime with the same state machine.
-4. Agree the plasma/CGH adapter contract with the optics lab before any hardware integration.
+1. Compare against iterative optimisation (Gerchberg-Saxton / weighted GS) and add zero-order suppression, so the quality numbers move toward realistic.
+2. Add SLM non-idealities to the bench: pixel crosstalk, limited fill factor, phase-response error, illumination non-uniformity.
+3. Add keyframe animation to the job format and feed per-frame holograms through the bench.
+4. Wrap the device simulator in an MQTT edge runtime with the same state machine.
+5. Agree the optical-engine adapter contract with the optics lab before any hardware integration.

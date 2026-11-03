@@ -141,3 +141,9 @@ button.estop:hover:not(:disabled) { background: #7a1a1a; border-color: #ff6b6b; 
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 .report.stale { opacity: .4; }
+
+.cghpair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.cghpair figure { margin: 0; }
+.cghpair canvas { width: 100%; aspect-ratio: 1; display: block; background: #000; border: 1px solid var(--line); border-radius: 6px; image-rendering: pixelated; }
+.cghpair figcaption { margin-top: 4px; font-size: 11px; color: var(--muted); text-align: center; }
+#cghOut[hidden] { display: none; }

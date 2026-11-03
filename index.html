@@ -146,6 +146,27 @@
       <h3>Machine log</h3>
       <ol id="log" class="log"></ol>
     </section>
+
+    <section>
+      <h2>8 · CGH bench <small>simulated optics</small></h2>
+      <p class="hint">Turns the compiled job into a phase hologram for an ideal SLM, then simulates the light to see which points form, per depth. A scaled bench volume, not a physical display.</p>
+      <div class="grid3">
+        <label>SLM px<select id="cghN"><option>128</option><option selected>256</option></select></label>
+        <label>Points<select id="cghPts"><option>100</option><option selected>250</option><option>500</option></select></label>
+        <label>Phase levels<select id="cghLevels"><option value="2">2 (binary)</option><option value="4">4</option><option value="16">16</option><option value="256" selected>256</option></select></label>
+      </div>
+      <div class="row" style="margin-top:8px"><button id="cghRun" class="primary" type="button">Simulate hologram</button></div>
+      <p id="cghStatus" class="hint">Compile a job first, then simulate.</p>
+      <div id="cghOut" hidden>
+        <div class="cghpair">
+          <figure><canvas id="cghPhase" aria-label="Phase pattern"></canvas><figcaption>Phase pattern (full SLM)</figcaption></figure>
+          <figure><canvas id="cghSlice" aria-label="Reconstruction at one depth"></canvas><figcaption id="cghSliceCap">Reconstruction</figcaption></figure>
+        </div>
+        <label class="slider">Depth plane <output id="o_cghPlane"></output>
+          <input id="cghPlane" type="range" min="0" max="8" step="1" value="4"></label>
+        <ul id="cghMetrics" class="report"></ul>
+      </div>
+    </section>
   </aside>
 </main>
 

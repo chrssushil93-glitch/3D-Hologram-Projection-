@@ -8,6 +8,7 @@ import {
 } from './src/spatial.js';
 import { compileJob } from './src/job.js';
 import { SimulatedDevice, STATES } from './src/device.js';
+import { analyzeJob, reconstructPlane, phaseToGray, intensityToGray } from './src/cgh.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -522,6 +523,81 @@ $('scrub').addEventListener('input', () => {
   state.previewT = parseFloat($('scrub').value);
 });
 
+// ---------------------------------------------------------------- CGH bench (simulated optics)
+let cgh = null;
+
+function drawGray(canvas, gray, n, crop = n / 2) {
+  // Draws the central (2*crop)^2 pixels of an n x n plane.
+  const size = crop * 2, x0 = n / 2 - crop;
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  for (let row = 0; row < size; row++) {
+    const src = (n / 2 + crop - 1 - row) * n + x0; // bench +y is up, canvas rows run downward
+    for (let x = 0; x < size; x++) {
+      const v = gray[src + x], o = (row * size + x) * 4;
+      img.data[o] = v; img.data[o + 1] = v; img.data[o + 2] = v; img.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function showCghPlane() {
+  if (!cgh) return;
+  const idx = parseInt($('cghPlane').value, 10);
+  const z = cgh.planeDepths[idx];
+  // crop to the job's volume extent: everything outside it is empty bench
+  const crop = Math.round(cgh.bench.lateralHalfM / cgh.bench.pitchM);
+  drawGray($('cghSlice'), intensityToGray(reconstructPlane(cgh.phase, cgh.bench, z)), cgh.bench.n, crop);
+  const rel = ((z - cgh.bench.zCentreM) / cgh.bench.depthSpanM) * 100;
+  $('o_cghPlane').textContent = `${(z * 1000).toFixed(1)} mm`;
+  $('cghSliceCap').textContent = `Reconstruction at ${(z * 1000).toFixed(1)} mm (${rel >= 0 ? '+' : ''}${rel.toFixed(0)}% of depth span)`;
+}
+
+function runCgh() {
+  const status = $('cghStatus');
+  if (!state.job || state.jobStale) { status.textContent = 'Compile a current job first, then simulate.'; return; }
+  status.textContent = 'Computing…';
+  $('cghRun').disabled = true;
+  setTimeout(() => {
+    try {
+      const planes = 9;
+      cgh = analyzeJob(state.job, {
+        n: parseInt($('cghN').value, 10), maxPoints: parseInt($('cghPts').value, 10),
+        phaseLevels: parseInt($('cghLevels').value, 10), planes,
+      });
+      drawGray($('cghPhase'), phaseToGray(cgh.phase), cgh.bench.n);
+      $('cghPlane').max = planes - 1;
+      $('cghPlane').value = Math.floor(planes / 2);
+      showCghPlane();
+      const m = cgh.metrics;
+      const rows = [
+        [cgh.aliased === 0, `${cgh.usedPoints} of ${cgh.totalVoxels.toLocaleString()} voxels simulated${cgh.aliased ? `; ${cgh.aliased} too fine for this SLM (aliased)` : ''}`],
+        [m.detectedFraction >= 0.8, `${(m.detectedFraction * 100).toFixed(0)}% of points formed (peak at least ${m.detectAt}× the plane average)`],
+        [true, `Peak vs plane average: mean ${m.meanPeakToMean.toFixed(1)}×, median ${m.medianPeakToMean.toFixed(1)}×, weakest ${m.minPeakToMean.toFixed(1)}×`],
+        [true, `Light on target points: ${(m.efficiency * 100).toFixed(1)}% of each plane`],
+        [true, `${cgh.bench.n}×${cgh.bench.n} px, ${(cgh.bench.pitchM * 1e6).toFixed(1)} µm pitch, ${(cgh.bench.wavelengthM * 1e9).toFixed(0)} nm, ${cgh.phaseLevels} phase levels · ${cgh.computeMs} ms`],
+      ];
+      const ul = $('cghMetrics');
+      ul.innerHTML = '';
+      for (const [ok, text] of rows) {
+        const li = document.createElement('li');
+        li.className = ok ? 'ok' : 'warn';
+        li.textContent = text;
+        ul.appendChild(li);
+      }
+      $('cghOut').hidden = false;
+      status.textContent = cgh.caveat;
+    } catch (err) {
+      status.textContent = `Simulation failed: ${err && err.message ? err.message : err}`;
+    } finally {
+      $('cghRun').disabled = false;
+    }
+  }, 30);
+}
+$('cghRun').onclick = runCgh;
+$('cghPlane').addEventListener('input', showCghPlane);
+
 // ---------------------------------------------------------------- loop
 function resize() {
   const stage = $('stage');
@@ -588,4 +664,4 @@ resize();
 requestAnimationFrame(frame);
 
 // Small hook for automated checks.
-window.__air = { state, device, compile, get job() { return state.job; } };
+window.__air = { state, device, compile, get job() { return state.job; }, get cgh() { return cgh; } };
