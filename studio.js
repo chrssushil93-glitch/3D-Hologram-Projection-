@@ -548,7 +548,7 @@ function showCghPlane() {
   const z = cgh.planeDepths[idx];
   // crop to the job's volume extent: everything outside it is empty bench
   const crop = Math.round(cgh.bench.lateralHalfM / cgh.bench.pitchM);
-  drawGray($('cghSlice'), intensityToGray(reconstructPlane(cgh.phase, cgh.bench, z)), cgh.bench.n, crop);
+  drawGray($('cghSlice'), intensityToGray(reconstructPlane(cgh.phase, cgh.bench, z, cgh.nonideal)), cgh.bench.n, crop);
   const rel = ((z - cgh.bench.zCentreM) / cgh.bench.depthSpanM) * 100;
   $('o_cghPlane').textContent = `${(z * 1000).toFixed(1)} mm`;
   $('cghSliceCap').textContent = `Reconstruction at ${(z * 1000).toFixed(1)} mm (${rel >= 0 ? '+' : ''}${rel.toFixed(0)}% of depth span)`;
@@ -565,19 +565,29 @@ function runCgh() {
       cgh = analyzeJob(state.job, {
         n: parseInt($('cghN').value, 10), maxPoints: parseInt($('cghPts').value, 10),
         phaseLevels: parseInt($('cghLevels').value, 10), planes,
+        iterations: parseInt($('cghIter').value, 10),
+        crosstalk: parseFloat($('cghXt').value), phaseNoiseDeg: parseFloat($('cghNoise').value),
       });
       drawGray($('cghPhase'), phaseToGray(cgh.phase), cgh.bench.n);
       $('cghPlane').max = planes - 1;
       $('cghPlane').value = Math.floor(planes / 2);
       showCghPlane();
-      const m = cgh.metrics;
+      const m = cgh.metrics, b0 = cgh.baseline;
+      const opt = cgh.iterations > 0;
+      const pct = (v) => `${(v * 100).toFixed(0)}%`;
+      const nonideal = [
+        cgh.nonideal.crosstalk > 0 ? `${pct(cgh.nonideal.crosstalk)} pixel crosstalk` : '',
+        cgh.nonideal.phaseNoiseRad > 0 ? `${Math.round((cgh.nonideal.phaseNoiseRad * 180) / Math.PI)}° phase noise` : '',
+      ].filter(Boolean).join(', ') || 'ideal SLM';
       const rows = [
         [cgh.aliased === 0, `${cgh.usedPoints} of ${cgh.totalVoxels.toLocaleString()} voxels simulated${cgh.aliased ? `; ${cgh.aliased} too fine for this SLM (aliased)` : ''}`],
-        [m.detectedFraction >= 0.8, `${(m.detectedFraction * 100).toFixed(0)}% of points formed (peak at least ${m.detectAt}× the plane average)`],
+        [m.detectedFraction >= 0.8, `${pct(m.detectedFraction)} of points formed (peak at least ${m.detectAt}× the plane average)`],
         [true, `Peak vs plane average: mean ${m.meanPeakToMean.toFixed(1)}×, median ${m.medianPeakToMean.toFixed(1)}×, weakest ${m.minPeakToMean.toFixed(1)}×`],
+        [m.uniformity >= 0.3, `Evenness (weakest ÷ median): ${m.uniformity.toFixed(2)}`],
         [true, `Light on target points: ${(m.efficiency * 100).toFixed(1)}% of each plane`],
-        [true, `${cgh.bench.n}×${cgh.bench.n} px, ${(cgh.bench.pitchM * 1e6).toFixed(1)} µm pitch, ${(cgh.bench.wavelengthM * 1e9).toFixed(0)} nm, ${cgh.phaseLevels} phase levels · ${cgh.computeMs} ms`],
       ];
+      if (opt) rows.push([true, `Optimiser (${cgh.iterations} it.) vs point-source: mean peak ${b0.meanPeakToMean.toFixed(1)}× → ${m.meanPeakToMean.toFixed(1)}×, light on targets ${(b0.efficiency * 100).toFixed(1)}% → ${(m.efficiency * 100).toFixed(1)}%`]);
+      rows.push([true, `${cgh.bench.n}×${cgh.bench.n} px, ${(cgh.bench.pitchM * 1e6).toFixed(1)} µm pitch, ${(cgh.bench.wavelengthM * 1e9).toFixed(0)} nm, ${cgh.phaseLevels} phase levels, ${nonideal} · ${cgh.computeMs} ms`]);
       const ul = $('cghMetrics');
       ul.innerHTML = '';
       for (const [ok, text] of rows) {

@@ -149,3 +149,73 @@ test('analyzeJob forms most points of a real job', () => {
   assert.ok(r.metrics.efficiency > 0 && r.metrics.efficiency < 1);
   assert.match(r.caveat, /Not a prediction/);
 });
+
+// ---- optimiser and SLM non-idealities
+import { refineHologram, slmField } from '../src/cgh.js';
+
+function spreadPoints(bench, count = 14, seed = 5) {
+  let s = seed;
+  const r = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  const pts = [];
+  for (let i = 0; i < count; i++) pts.push((r() - 0.5) * 0.0006, (r() - 0.5) * 0.0006, bench.zCentreM + (r() - 0.5) * 0.02);
+  return new Float64Array(pts);
+}
+
+test('weighted GS refinement concentrates much more light on the targets', () => {
+  const bench = makeBench({ n: 128 });
+  const pts = spreadPoints(bench);
+  const base = computeHologram(pts, bench);
+  const m0 = evaluateHologram(base, pts, bench, { planes: 5 });
+  const refined = refineHologram(base, pts, bench, { iterations: 8, planes: 5 });
+  const m1 = evaluateHologram(refined, pts, bench, { planes: 5 });
+  assert.ok(m1.meanPeakToMean > 5 * m0.meanPeakToMean, `${m1.meanPeakToMean} vs ${m0.meanPeakToMean}`);
+  assert.ok(m1.efficiency > 2 * m0.efficiency, `${m1.efficiency} vs ${m0.efficiency}`);
+  assert.ok(m1.minPeakToMean > m0.minPeakToMean);
+  assert.equal(m1.detectedFraction, 1);
+});
+
+test('refinement is deterministic and with zero iterations changes nothing', () => {
+  const bench = makeBench({ n: 64 });
+  const pts = new Float64Array([0.0001, 0.0001, 0.195, -0.0002, 0.0001, 0.205]);
+  const base = computeHologram(pts, bench);
+  const a = refineHologram(base, pts, bench, { iterations: 3, planes: 3 });
+  const b = refineHologram(base, pts, bench, { iterations: 3, planes: 3 });
+  assert.deepEqual(Array.from(a), Array.from(b));
+  const none = refineHologram(base, pts, bench, { iterations: 0, planes: 3 });
+  assert.equal(none.length, base.length);
+  for (let i = 0; i < base.length; i++) assert.ok(Math.abs(none[i] - base[i]) < 0.02, 'only re-quantised');
+});
+
+test('pixel crosstalk and phase noise degrade the focus, and noise is reproducible', () => {
+  const bench = makeBench({ n: 128 });
+  const pts = spreadPoints(bench, 8);
+  const ph = refineHologram(computeHologram(pts, bench), pts, bench, { iterations: 6, planes: 5 });
+  const clean = evaluateHologram(ph, pts, bench, { planes: 5 });
+  const xt = evaluateHologram(ph, pts, bench, { planes: 5, nonideal: { crosstalk: 0.3 } });
+  const noisy = evaluateHologram(ph, pts, bench, { planes: 5, nonideal: { phaseNoiseRad: 0.5 } });
+  const noisy2 = evaluateHologram(ph, pts, bench, { planes: 5, nonideal: { phaseNoiseRad: 0.5 } });
+  assert.ok(xt.meanPeakToMean < clean.meanPeakToMean, `crosstalk ${xt.meanPeakToMean} vs ${clean.meanPeakToMean}`);
+  assert.ok(noisy.meanPeakToMean < clean.meanPeakToMean, `noise ${noisy.meanPeakToMean} vs ${clean.meanPeakToMean}`);
+  assert.equal(noisy.meanPeakToMean, noisy2.meanPeakToMean);
+});
+
+test('slmField is unit amplitude when ideal and loses amplitude with crosstalk', () => {
+  const phase = Float32Array.from({ length: 16 }, (_, i) => (i % 2 ? 2.5 : -2.5));
+  const ideal = slmField(phase);
+  for (let i = 0; i < 16; i++) assert.ok(Math.abs(Math.hypot(ideal.re[i], ideal.im[i]) - 1) < 1e-12);
+  const xt = slmField(phase, { crosstalk: 0.5 });
+  assert.ok(Math.hypot(xt.re[5], xt.im[5]) < 0.9);
+});
+
+test('analyzeJob reports baseline and optimised metrics', () => {
+  const job = cubeJob();
+  const plain = analyzeJob(job, { n: 128, maxPoints: 60, planes: 5 });
+  assert.equal(plain.iterations, 0);
+  assert.equal(plain.metrics, plain.baseline);
+  const opt = analyzeJob(job, { n: 128, maxPoints: 60, planes: 5, iterations: 6 });
+  assert.equal(opt.iterations, 6);
+  assert.ok(opt.metrics.efficiency > opt.baseline.efficiency, `${opt.metrics.efficiency} vs ${opt.baseline.efficiency}`);
+  assert.ok(opt.metrics.meanPeakToMean > opt.baseline.meanPeakToMean);
+  const worse = analyzeJob(job, { n: 128, maxPoints: 60, planes: 5, iterations: 6, crosstalk: 0.4, phaseNoiseDeg: 30 });
+  assert.ok(worse.metrics.meanPeakToMean < opt.metrics.meanPeakToMean);
+});

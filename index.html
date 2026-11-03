@@ -155,6 +155,11 @@
         <label>Points<select id="cghPts"><option>100</option><option selected>250</option><option>500</option></select></label>
         <label>Phase levels<select id="cghLevels"><option value="2">2 (binary)</option><option value="4">4</option><option value="16">16</option><option value="256" selected>256</option></select></label>
       </div>
+      <div class="grid3" style="margin-top:8px">
+        <label>Optimiser<select id="cghIter"><option value="0">Off (point-source)</option><option value="5">5 iterations</option><option value="10" selected>10 iterations</option><option value="20">20 iterations</option></select></label>
+        <label>Pixel crosstalk<select id="cghXt"><option value="0" selected>None</option><option value="0.1">10%</option><option value="0.3">30%</option></select></label>
+        <label>Phase noise<select id="cghNoise"><option value="0" selected>None</option><option value="10">10°</option><option value="30">30°</option></select></label>
+      </div>
       <div class="row" style="margin-top:8px"><button id="cghRun" class="primary" type="button">Simulate hologram</button></div>
       <p id="cghStatus" class="hint">Compile a job first, then simulate.</p>
       <div id="cghOut" hidden>

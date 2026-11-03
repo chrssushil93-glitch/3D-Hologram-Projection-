@@ -10,6 +10,7 @@
 // Metrics describe how well the algorithm can focus light on the requested points under those
 // assumptions. They say nothing about brightness, safety or visibility of a physical display.
 import { fft2d, isPowerOfTwo } from './fft.js';
+import { mulberry32 } from './spatial.js';
 
 const TWO_PI = 2 * Math.PI;
 
@@ -123,14 +124,46 @@ export function propagate(re, im, bench, z) {
   return { re: R, im: I };
 }
 
+/**
+ * Complex field leaving the SLM for a phase pattern, with optional non-idealities (deterministic):
+ *  - phaseNoiseRad: Gaussian phase error per pixel (standard deviation, radians)
+ *  - crosstalk: fraction (0..1) of each pixel's field that leaks equally into its four neighbours,
+ *    which also lowers amplitude where the phase changes quickly (as real pixel fringing does)
+ */
+export function slmField(phase, nonideal = {}) {
+  const { crosstalk = 0, phaseNoiseRad = 0, seed = 1 } = nonideal;
+  const len = phase.length;
+  const n = Math.round(Math.sqrt(len));
+  let re = new Float64Array(len), im = new Float64Array(len);
+  const rand = mulberry32(seed);
+  const gauss = () => Math.sqrt(-2 * Math.log(1 - rand())) * Math.cos(TWO_PI * rand());
+  for (let i = 0; i < len; i++) {
+    const a = phase[i] + (phaseNoiseRad > 0 ? phaseNoiseRad * gauss() : 0);
+    re[i] = Math.cos(a); im[i] = Math.sin(a);
+  }
+  if (crosstalk > 0) {
+    const c = Math.min(1, crosstalk);
+    const R = new Float64Array(len), I = new Float64Array(len);
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x;
+        const l = x > 0 ? i - 1 : i, r = x < n - 1 ? i + 1 : i;
+        const u = y > 0 ? i - n : i, d = y < n - 1 ? i + n : i;
+        R[i] = (1 - c) * re[i] + (c / 4) * (re[l] + re[r] + re[u] + re[d]);
+        I[i] = (1 - c) * im[i] + (c / 4) * (im[l] + im[r] + im[u] + im[d]);
+      }
+    }
+    re = R; im = I;
+  }
+  return { re, im };
+}
+
 /** Intensity |U|^2 at depth z for a phase-only hologram lit by a unit plane wave. */
-export function reconstructPlane(phase, bench, z) {
-  const n2 = phase.length;
-  const re = new Float64Array(n2), im = new Float64Array(n2);
-  for (let i = 0; i < n2; i++) { re[i] = Math.cos(phase[i]); im[i] = Math.sin(phase[i]); }
-  const f = propagate(re, im, bench, z);
-  const out = new Float32Array(n2);
-  for (let i = 0; i < n2; i++) out[i] = f.re[i] * f.re[i] + f.im[i] * f.im[i];
+export function reconstructPlane(phase, bench, z, nonideal = {}) {
+  const f0 = slmField(phase, nonideal);
+  const f = propagate(f0.re, f0.im, bench, z);
+  const out = new Float32Array(phase.length);
+  for (let i = 0; i < out.length; i++) out[i] = f.re[i] * f.re[i] + f.im[i] * f.im[i];
   return out;
 }
 
@@ -145,7 +178,7 @@ export function planeDepths(bench, planes = 9) {
  * Score the hologram: for every target point, take the brightest pixel (3x3) on its depth plane and
  * compare to the plane's mean intensity. A point counts as formed when that ratio is >= detectAt.
  */
-export function evaluateHologram(phase, points, bench, { planes = 9, detectAt = 5 } = {}) {
+export function evaluateHologram(phase, points, bench, { planes = 9, detectAt = 5, nonideal = {} } = {}) {
   const { n, pitchM: p } = bench;
   const depths = planeDepths(bench, planes);
   const zMin = depths[0];
@@ -160,7 +193,7 @@ export function evaluateHologram(phase, points, bench, { planes = 9, detectAt = 
   let effNum = 0, effDen = 0;
   const perPlane = [];
   for (const [idx, list] of [...byPlane.entries()].sort((a, b) => a[0] - b[0])) {
-    const I = reconstructPlane(phase, bench, depths[idx]);
+    const I = reconstructPlane(phase, bench, depths[idx], nonideal);
     let total = 0;
     for (let i = 0; i < I.length; i++) total += I[i];
     const mean = total / I.length;
@@ -189,6 +222,8 @@ export function evaluateHologram(phase, points, bench, { planes = 9, detectAt = 
     meanPeakToMean: avg(ratios),
     medianPeakToMean: ratios.length ? ratios[Math.floor(ratios.length / 2)] : 0,
     minPeakToMean: ratios.length ? ratios[0] : 0,
+    // how even the points are: weakest point relative to the median point (1 = perfectly even)
+    uniformity: ratios.length && ratios[Math.floor(ratios.length / 2)] > 0 ? ratios[0] / ratios[Math.floor(ratios.length / 2)] : 0,
     detectedFraction: ratios.length ? ratios.filter((r) => r >= detectAt).length / ratios.length : 0,
     detectAt,
     // share of the light that lands on the target pixels (3x3 around each point) on its own plane
@@ -199,22 +234,85 @@ export function evaluateHologram(phase, points, bench, { planes = 9, detectAt = 
 
 function avg(a) { return a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0; }
 
+/**
+ * Weighted Gerchberg-Saxton refinement for a set of target points at several depths.
+ * Each iteration propagates the SLM field to every depth plane, keeps only the phase at the target
+ * pixels (amplitude set by an adaptive weight), propagates back and sums. Weights shrink for points
+ * that came out too bright and grow for weak ones. Returns the refined phase (quantised).
+ */
+export function refineHologram(initPhase, points, bench, { iterations = 8, planes = 9, phaseLevels = 256 } = {}) {
+  const { n, pitchM: p } = bench;
+  const N2 = n * n;
+  const depths = planeDepths(bench, planes);
+  const zMin = depths[0];
+  const step = planes > 1 ? bench.depthSpanM / (planes - 1) : 1;
+  const groups = new Map();
+  for (let j = 0; j < points.length; j += 3) {
+    const idx = planes > 1 ? Math.max(0, Math.min(planes - 1, Math.round((points[j + 2] - zMin) / step))) : 0;
+    const cx = Math.max(0, Math.min(n - 1, Math.round(points[j] / p + n / 2)));
+    const cy = Math.max(0, Math.min(n - 1, Math.round(points[j + 1] / p + n / 2)));
+    if (!groups.has(idx)) groups.set(idx, []);
+    groups.get(idx).push({ pix: cy * n + cx, w: 1 });
+  }
+  const phase = Float64Array.from(initPhase);
+  if (iterations > 0 && groups.size > 0) {
+    for (let it = 0; it < iterations; it++) {
+      const re0 = new Float64Array(N2), im0 = new Float64Array(N2);
+      for (let i = 0; i < N2; i++) { re0[i] = Math.cos(phase[i]); im0[i] = Math.sin(phase[i]); }
+      const accR = new Float64Array(N2), accI = new Float64Array(N2);
+      const amps = [];
+      for (const [idx, list] of groups) {
+        const P = propagate(re0, im0, bench, depths[idx]);
+        const tR = new Float64Array(N2), tI = new Float64Array(N2);
+        for (const t of list) {
+          const a = Math.hypot(P.re[t.pix], P.im[t.pix]);
+          amps.push([t, a]);
+          const ph = Math.atan2(P.im[t.pix], P.re[t.pix]);
+          tR[t.pix] += t.w * Math.cos(ph);
+          tI[t.pix] += t.w * Math.sin(ph);
+        }
+        const B = propagate(tR, tI, bench, -depths[idx]);
+        for (let i = 0; i < N2; i++) { accR[i] += B.re[i]; accI[i] += B.im[i]; }
+      }
+      for (let i = 0; i < N2; i++) phase[i] = Math.atan2(accI[i], accR[i]);
+      const mean = amps.reduce((sum, [, a]) => sum + a, 0) / amps.length;
+      for (const [t, a] of amps) t.w *= Math.min(4, Math.max(0.25, mean / Math.max(a, 1e-12)));
+    }
+  }
+  const out = new Float32Array(N2);
+  for (let i = 0; i < N2; i++) {
+    let a = phase[i];
+    if (phaseLevels > 0 && phaseLevels < 65536) {
+      const q = Math.round(((a + Math.PI) / TWO_PI) * phaseLevels) % phaseLevels;
+      a = (q / phaseLevels) * TWO_PI - Math.PI;
+    }
+    out[i] = a;
+  }
+  return out;
+}
+
 /** Full pipeline for a compiled job package. */
-export function analyzeJob(job, { n = 256, maxPoints = 250, phaseLevels = 256, planes = 9 } = {}) {
+export function analyzeJob(job, {
+  n = 256, maxPoints = 250, phaseLevels = 256, planes = 9,
+  iterations = 0, crosstalk = 0, phaseNoiseDeg = 0,
+} = {}) {
   const bench = makeBench({ n });
   const points = mapJobToBench(job.voxelsMm, job.volume, bench, maxPoints);
   const usedPoints = points.length / 3;
   const alias = countAliased(points, bench);
+  const nonideal = { crosstalk, phaseNoiseRad: (phaseNoiseDeg * Math.PI) / 180, seed: 1 };
   const t0 = Date.now();
-  const phase = computeHologram(points, bench, { phaseLevels });
-  const metrics = evaluateHologram(phase, points, bench, { planes });
+  const initial = computeHologram(points, bench, { phaseLevels });
+  const baseline = evaluateHologram(initial, points, bench, { planes, nonideal });
+  const phase = iterations > 0 ? refineHologram(initial, points, bench, { iterations, planes, phaseLevels }) : initial;
+  const metrics = iterations > 0 ? evaluateHologram(phase, points, bench, { planes, nonideal }) : baseline;
   return {
     bench, phase, points, usedPoints,
     totalVoxels: job.voxelCount,
-    phaseLevels,
+    phaseLevels, iterations, nonideal,
     aliased: alias.aliased,
     planeDepths: planeDepths(bench, planes),
-    metrics,
+    baseline, metrics,
     computeMs: Date.now() - t0,
     caveat: 'Ideal-SLM simulation on a scaled bench volume. Not a prediction of any physical display.',
   };
