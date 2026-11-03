@@ -4,7 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(fileURLToPath(new URL('.', import.meta.url)));
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const port = Number(process.env.PORT) || 5173;
 const types = {
   '.html': 'text/html; charset=utf-8',
@@ -14,7 +14,7 @@ const types = {
   '.glb': 'model/gltf-binary',
   '.svg': 'image/svg+xml',
 };
-const blocked = new Set(['server.js', 'package.json', 'README.md']);
+const blocked = new Set(['scripts/dev-server.js', 'package.json', 'README.md', 'vercel.json']);
 
 http.createServer(async (req, res) => {
   try {
@@ -22,7 +22,7 @@ http.createServer(async (req, res) => {
     let rel = normalize(decodeURIComponent(url.pathname)).replace(/^([/\\])+/, '');
     if (rel === '' || rel.endsWith('/')) rel += 'index.html';
     const file = resolve(join(root, rel));
-    if (!file.startsWith(root) || rel.startsWith('test') || rel.startsWith('node_modules') || blocked.has(rel)) {
+    if (!file.startsWith(root) || rel.startsWith('test') || rel.startsWith('scripts') || rel.startsWith('node_modules') || blocked.has(rel)) {
       res.writeHead(404).end('Not found');
       return;
     }

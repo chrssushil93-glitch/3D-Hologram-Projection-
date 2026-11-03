@@ -65,7 +65,8 @@ src/job.js                          compiler, job schema, backend registry
 src/device.js                       virtual machine and protocol states
 src/cgh.js, src/fft.js              CGH bench simulation (point-source hologram, angular-spectrum propagation)
 src/sha256.js                       checksum shared by browser and Node
-server.js                           tiny static server
+scripts/dev-server.js                tiny local static server (the live site is plain static files)
+vercel.json                         static-site config for hosting
 test/core.test.js, cgh.test.js     unit tests
 vendor/three/                       Three.js r170 (MIT, see LICENSE)
 ```
